@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -31,6 +32,35 @@ func TestConvert_SuccessAndRAMOnly(t *testing.T) {
 
 	t.Setenv("TMPDIR", tmpDir)
 
+	// Watch TMPDIR and the current working directory during the whole
+	// conversion to catch transient files (created and then deleted), not just
+	// leftovers after Convert returns.
+	done := make(chan struct{})
+	stop := func() { close(done) }
+	var mu sync.Mutex
+	var seen []string
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			for _, dir := range []string{tmpDir, "."} {
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					continue
+				}
+				mu.Lock()
+				for _, e := range entries {
+					seen = append(seen, dir+"/"+e.Name())
+				}
+				mu.Unlock()
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
 	markdown := `# Test Title
 
 - Item 1
@@ -43,6 +73,7 @@ func TestConvert_SuccessAndRAMOnly(t *testing.T) {
 
 	ctx := context.Background()
 	pdfBytes, err := Convert(ctx, 10*time.Second, markdown)
+	stop()
 	if err != nil {
 		t.Fatalf("unexpected conversion error: %v", err)
 	}
@@ -56,18 +87,26 @@ func TestConvert_SuccessAndRAMOnly(t *testing.T) {
 		t.Errorf("expected output to start with %%PDF, got %q", string(pdfBytes)[:10])
 	}
 
-	// Verify that TMPDIR remains empty (RAM-only conversion)
-	entries, err := os.ReadDir(tmpDir)
-	if err != nil {
-		t.Fatalf("failed to read tmpdir: %v", err)
-	}
-
-	if len(entries) > 0 {
-		t.Errorf("expected TMPDIR to be empty (RAM-only), found %d entries", len(entries))
-		for _, entry := range entries {
-			t.Logf("unexpected file in TMPDIR: %s", entry.Name())
+	// Verify that no temporary file was observed at any point (RAM-only). The
+	// "." directory legitimately contains the test source files, so only flag
+	// files that are clearly transient (pandoc/typst intermediates).
+	mu.Lock()
+	defer mu.Unlock()
+	for _, name := range seen {
+		if isTransientFile(name) {
+			t.Errorf("unexpected transient file during conversion: %s", name)
 		}
 	}
+}
+
+// isTransientFile reports whether a path looks like an intermediate produced by
+// pandoc/typst (rather than a legitimate source or test file).
+func isTransientFile(path string) bool {
+	base := path[strings.LastIndex(path, "/")+1:]
+	return strings.HasSuffix(base, ".typ") ||
+		strings.HasPrefix(base, "pandoc") ||
+		strings.HasPrefix(base, "typst") ||
+		strings.HasPrefix(base, ".typst")
 }
 
 func TestConvert_Timeout(t *testing.T) {

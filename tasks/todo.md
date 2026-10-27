@@ -69,7 +69,7 @@
 - [ ] Errores clasificados: parse de Markdown → `ErrInvalidMarkdown`; resto → `ErrConversion`
 
 **Verification:**
-- [ ] `go test ./internal/converter/...` (requiere `pandoc`+`typst` en PATH): pipe correcto, propagación de `stderr`, timeout, y `TMPDIR` controlado que queda vacío tras convertir
+- [ ] `go test ./internal/converter/...` (requiere `pandoc`+`typst` en PATH): pipe correcto, propagación de `stderr`, timeout, y `TMPDIR`/CWD vigilados **durante** la conversión (no solo al final) para detectar archivos transitorios
 
 **Dependencies:** Task 1
 
@@ -90,13 +90,15 @@
 **Acceptance criteria:**
 - [ ] Router chi con `POST /convert` y `GET /health` (health → `200 {"status":"ok"}`)
 - [ ] Decodifica `ConvertRequest`; `content` vacío → `400`; body inválido → `400`
+- [ ] `Content-Type` distinto de `application/json` → `415`
 - [ ] Entrada que supera `MAX_FILE_SIZE_MB` → `413`
 - [ ] Mapeo de errores: `ErrInvalidMarkdown` → `422 "Invalid Markdown"`; `ErrConversion` → `500 "Conversion failed"`
+- [ ] `detail` de error genérico (sin `stderr` de Pandoc ni fragmentos de Markdown)
 - [ ] Respuesta 200: `content_base64` (base64) + `mime_type: application/pdf`
 - [ ] Respuestas de error en RFC 9457 (`application/problem+json`)
 
 **Verification:**
-- [ ] `go test ./internal/httpserver/...` con `httptest` (200/400/413/422/500)
+- [ ] `go test ./internal/httpserver/...` con `httptest` (200/400/413/415/422/500)
 
 **Dependencies:** Task 2, Task 3
 
@@ -119,7 +121,7 @@
 **Acceptance criteria:**
 - [ ] Markdown con tablas, headers y listas → PDF con magic `%PDF` válido
 - [ ] Verificación de que la estructura se preserva (sin pérdida de formato)
-- [ ] Verificación de que no se crean archivos temporales (TMPDIR controlado)
+- [ ] Verificación de que no se crean archivos temporales, vigilando `TMPDIR`/CWD **durante** toda la conversión (archivos transitorios incluidos); con `strace` si está disponible
 - [ ] Los tests se omiten (`t.Skip`) si `pandoc`/`typst` no están en PATH
 
 **Verification:**
@@ -128,19 +130,21 @@
 **Dependencies:** Task 3
 
 **Files likely touched:**
-- `test/convert_integration_test.go`
+- `test/ram_only_test.go`
 - `test/testdata/` (fixtures Markdown)
 
 **Estimated scope:** Small (2 files)
 
 ---
 
-## Task 6: `main.go` (wiring + graceful shutdown)
+## Task 6: `main.go` (wiring + graceful shutdown + slog)
 
-**Description:** Ensamblar config, núcleo y server HTTP; graceful shutdown por señales.
+**Description:** Ensamblar config, núcleo y server HTTP; graceful shutdown por señales; configurar `slog` (JSON una línea a stdout, nivel desde `LOG_LEVEL`) y montar el middleware de request logging (ADR-0007).
 
 **Acceptance criteria:**
 - [ ] `cmd/pdf-converter/main.go` arma el grafo (config → converter → server) y arranca
+- [ ] `slog.SetDefault` con handler JSON a stdout y nivel `config.ParseLogLevel(cfg.LogLevel)`
+- [ ] Middleware de request logging emite `"http request completed"` sin contenido del body
 - [ ] Señales (SIGINT/SIGTERM) → shutdown limpio (context cancel + `srv.Shutdown`)
 
 **Verification:**

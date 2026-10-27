@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -18,12 +19,19 @@ type Server struct {
 	convertFunc func(ctx context.Context, timeout time.Duration, markdown string) ([]byte, error)
 }
 
-// NewServer creates a new HTTP server with all routes configured.
+// NewServer creates a new HTTP server with all routes configured, using the
+// default slog logger (ADR-0007). Use NewServerWithLogger to inject a logger.
 func NewServer(cfg config.Config) *Server {
+	return NewServerWithLogger(cfg, slog.Default())
+}
+
+// NewServerWithLogger creates a new HTTP server with the given logger.
+func NewServerWithLogger(cfg config.Config, logger *slog.Logger) *Server {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RequestID)
+	r.Use(RequestLogger(logger))
 
 	srv := &Server{
 		router:      r,

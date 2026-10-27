@@ -103,8 +103,19 @@ func Convert(ctx context.Context, cfg Config, markdown string) ([]byte, error) {
 Convenciones:
 - DTOs con tags JSON `snake_case`; binario como `[]byte` (base64 en wire).
 - Errores RFC 9457, `title` estable: `"Invalid Markdown"` (422, error de parse
-  de Pandoc) y `"Conversion failed"` (fallo genérico del motor).
+  de Pandoc), `"Conversion failed"` (500, fallo genérico del motor),
+  `"Payload Too Large"` (413), `"Invalid Request"` (400) y
+  `"Unsupported Media Type"` (415, `Content-Type` distinto de `application/json`).
+- El `detail` de la respuesta RFC 9457 es **genérico** y nunca incluye el
+  `stderr` de Pandoc ni fragmentos del Markdown (ADR-0007). El `stderr` se usa
+  solo internamente para clasificar el error (422 vs 500).
 - Sin comentarios en español en el código; doc comments en inglés.
+
+Nota RAM-only: `pandoc --pdf-engine=typst` puede escribir un fuente intermedio
+`.typ` transitorio en `TMPDIR`. El comportamiento se verifica en integración
+(`/test`, Task 5) vigilando `TMPDIR`/CWD durante la conversión (y con `strace`
+si está disponible). Si se confirma escritura en disco, la contingencia es migrar
+a un pipeline de dos etapas en memoria: `pandoc -t typst -o -` → `typst compile - -`.
 
 ## Testing Strategy
 
@@ -113,19 +124,27 @@ Convenciones:
   del `stderr` de Pandoc, timeout vía `context`, y estructura preservada
   (tablas, headers, listas) sobre un PDF de prueba generado por Pandoc real.
 - **Handler (unit):** `httptest` sobre `chi` — 200 válido, 400 body inválido,
-  405 método, 413 entrada sobre `MAX_FILE_SIZE_MB`, 422 Markdown inválido, y
-  problema RFC 9457 en fallo de Pandoc.
-- **Config (unit):** `Load()` con env y defaults.
+  405 método, 413 entrada sobre `MAX_FILE_SIZE_MB`, 415 `Content-Type` no JSON,
+  422 Markdown inválido, y problema RFC 9457 en fallo de Pandoc (con `detail`
+  genérico, sin filtrar el `stderr`).
+- **Config (unit):** `Load()` con env y defaults; `ParseLogLevel` para
+  `LOG_LEVEL` → `slog.Level`.
+- **Logging (unit):** el middleware de request logging emite
+  `"http request completed"` (método, path, status, bytes, duración, request_id)
+  y nunca loguea el contenido del body.
 - **Integración (`/test`, requiere `pandoc`+`typst`):** conversión end-to-end de
   un Markdown con tablas/headers y verificación de que el output es un PDF válido
-  (magic `%PDF`). Las pruebas de renderizado de Typst viven en `/test`, como
+  (magic `%PDF`). Incluye la verificación RAM-only (vigilar `TMPDIR`/CWD durante
+  la conversión y, si hay `strace`, revisar que pandoc/typst no abren archivos
+  para escritura). Las pruebas de renderizado de Typst viven en `/test`, como
   parte natural del desarrollo.
 - **Cobertura:** núcleo y DTOs cubiertos; el loop del server queda delgado.
 
 ## Boundaries
 
-- **Always:** validar inputs (content no vacío, tamaño límite), devolver RFC 9457,
-  loggear sin contenido del documento, tests antes de cerrar, `gofmt`/`go vet`.
+- **Always:** validar inputs (content no vacío, tamaño límite, `Content-Type`
+  `application/json` → 415 si no), devolver RFC 9457, loggear sin contenido del
+  documento, tests antes de cerrar, `gofmt`/`go vet`.
 - **Ask first:** cambiar motor PDF (Typst↔WeasyPrint), añadir dependencias,
   modificar el contrato (campo nuevo o código de error), cambiar CI/Dockerfile.
 - **Never:** escribir archivos temporales en disco (RAM-only), loguear el
@@ -137,10 +156,13 @@ Convenciones:
 - `POST /convert` con `{"content":"# T\n\ntexto"}` devuelve 200 con
   `content_base64` decodificable a un PDF válido (`%PDF-`).
 - El servicio no crea ningún archivo temporal durante la conversión (verificable
-  en test inspeccionando que solo se usan pipes).
+  en test de integración vigilando `TMPDIR`/CWD durante todo el proceso, no solo
+  al final).
 - Markdown inválido (parse error de Pandoc) devuelve `422` con
   `title: "Invalid Markdown"`; fallo genérico del motor devuelve `title:
-  "Conversion failed"`. Ambos capturan el `stderr` de Pandoc.
+  "Conversion failed"`. El `detail` de ambos es genérico (sin `stderr` ni
+  fragmentos del documento).
+- `Content-Type` distinto de `application/json` devuelve `415`.
 - Entrada que supera `MAX_FILE_SIZE_MB` (20 MB por defecto) se rechaza con `413`.
 - Imagen Docker final con `pandoc` + `typst` funcional y usuario non-root.
 - `go build ./...`, `go vet ./...` y `go test ./...` limpios.

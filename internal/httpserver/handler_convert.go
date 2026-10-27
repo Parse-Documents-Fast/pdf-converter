@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 
 	"github.com/Parse-Documents-Fast/pdf-converter/internal/converter"
@@ -12,9 +13,28 @@ import (
 	"github.com/Parse-Documents-Fast/pdf-converter/internal/problem"
 )
 
+const (
+	// jsonEscapeWorstCase is the maximum expansion factor of a single input byte
+	// when encoding/json escapes it (e.g. '<' -> \u003c, control bytes -> \u00XX).
+	// The envelope is bounded to this factor to avoid a false 413 on heavily
+	// escaped content while still capping memory usage.
+	jsonEscapeWorstCase = 6
+
+	// jsonEnvelopeOverhead accounts for the fixed JSON structure around the
+	// content field ({"content":"..."}).
+	jsonEnvelopeOverhead = 4096
+)
+
 func (s *Server) handleConvert() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		maxBytes := s.cfg.MaxFileSizeBytes + 1048576 // JSON envelope leeway
+		contentType := r.Header.Get("Content-Type")
+		mediaType, _, err := mime.ParseMediaType(contentType)
+		if err != nil || mediaType != "application/json" {
+			problem.WriteProblem(w, http.StatusUnsupportedMediaType, "Unsupported Media Type", "Content-Type must be application/json", r.URL.Path)
+			return
+		}
+
+		maxBytes := s.cfg.MaxFileSizeBytes*jsonEscapeWorstCase + jsonEnvelopeOverhead
 		bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBytes))
 		if err != nil {
 			problem.WriteProblem(w, http.StatusRequestEntityTooLarge, "Payload Too Large", "Request body exceeds maximum allowed size", r.URL.Path)
@@ -42,10 +62,10 @@ func (s *Server) handleConvert() http.HandlerFunc {
 		pdfBytes, err := s.convertFunc(r.Context(), s.cfg.ConvertTimeout, req.Content)
 		if err != nil {
 			if errors.Is(err, converter.ErrInvalidMarkdown) {
-				problem.WriteProblem(w, http.StatusUnprocessableEntity, "Invalid Markdown", err.Error(), r.URL.Path)
+				problem.WriteProblem(w, http.StatusUnprocessableEntity, "Invalid Markdown", "The provided Markdown could not be converted", r.URL.Path)
 				return
 			}
-			problem.WriteProblem(w, http.StatusInternalServerError, "Conversion failed", err.Error(), r.URL.Path)
+			problem.WriteProblem(w, http.StatusInternalServerError, "Conversion failed", "The conversion engine failed to produce a PDF", r.URL.Path)
 			return
 		}
 

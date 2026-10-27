@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"testing"
 	"time"
 )
@@ -96,6 +97,30 @@ func TestLoad_Errors(t *testing.T) {
 			_, err := Load()
 			if err == nil {
 				t.Fatalf("expected error containing %q, got nil", tt.expectedError)
+			}
+		})
+	}
+}
+
+func TestParseLogLevel(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected slog.Level
+	}{
+		{"debug", slog.LevelDebug},
+		{"DEBUG", slog.LevelDebug},
+		{"info", slog.LevelInfo},
+		{"warn", slog.LevelWarn},
+		{"warning", slog.LevelWarn},
+		{"error", slog.LevelError},
+		{"", slog.LevelInfo},
+		{"invalid", slog.LevelInfo},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := ParseLogLevel(tt.input); got != tt.expected {
+				t.Errorf("ParseLogLevel(%q) = %v, want %v", tt.input, got, tt.expected)
 			}
 		})
 	}

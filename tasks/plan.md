@@ -10,11 +10,13 @@ Construir `pdf-converter`, el wrapper de Pandoc que convierte Markdown a PDF al 
 
 1. **Router `chi/v5`** — aprobado en spec, coherente con `pdf-main`.
 2. **Núcleo puro, sin acoplar al transporte** (ADR-0004) — `internal/converter` expone `Convert(ctx, timeout, markdown) ([]byte, error)`, sin importar DTOs ni HTTP. El handler es una capa delgada.
-3. **Pandoc por pipes (`stdin`/`stdout`)** — `exec.CommandContext` con `cmd.Stdin`/`cmd.Stdout`/`cmd.Stderr`; nunca `os.CreateTemp`. El motor elegido (**Typst**, `--pdf-engine=typst`) renderiza en memoria, a diferencia de LaTeX que escribe `.aux`/`.log` en TMPDIR.
-4. **Clasificación de errores del subproceso** — `ErrInvalidMarkdown` (parse, → 422) vs `ErrConversion` (fallo genérico del motor, → 500), con `title` estable. La distinción se basa en el `stderr`/exit de Pandoc.
-5. **Límite de entrada `MAX_FILE_SIZE_MB`** — 1 MB = 1 048 576 bytes; default 20 (ADR-0008). Se aplica al byte-length de `content`. En el compose se inyecta desde el `.env` raíz (`${MAX_FILE_SIZE_MB:-20}`).
-6. **Tests de integración en `/test`** — validan Typst sobre tablas/headers y la ausencia de archivos temporales; se omiten con `t.Skip` si `pandoc`/`typst` no están en PATH. El resto de tests son unit (no requieren Pandoc).
-7. **Deploy como servicio interno** — `networks: [fast_pdf_network]`, **sin** `ports` al host, imagen multi-stage con `pandoc` + `typst` + `ca-certificates`, usuario non-root.
+3. **Pandoc por pipes (`stdin`/`stdout`)** — `exec.CommandContext` con `cmd.Stdin`/`cmd.Stdout`/`cmd.Stderr`; nunca `os.CreateTemp`. El motor elegido (**Typst**, `--pdf-engine=typst`) renderiza en memoria, a diferencia de LaTeX que escribe `.aux`/`.log` en TMPDIR. **Riesgo verificado en integración:** pandoc puede escribir un `.typ` intermedio transitorio; si se confirma, contingencia = pipeline de dos etapas (`pandoc -t typst -o -` → `typst compile - -`).
+4. **Clasificación de errores del subproceso** — `ErrInvalidMarkdown` (parse, → 422) vs `ErrConversion` (fallo genérico del motor, → 500), con `title` estable. La distinción se basa en el `stderr`/exit de Pandoc, pero el `detail` de la respuesta RFC 9457 es genérico (nunca expone el `stderr` ni fragmentos del documento).
+5. **Límite de entrada `MAX_FILE_SIZE_MB`** — 1 MB = 1 048 576 bytes; default 20 (ADR-0008). Se aplica al byte-length de `content`. El `MaxBytesReader` del handler usa un envelope determinista (`MaxFileSizeBytes*6 + overhead`, peor caso de escape JSON), no un leeway mágico. En el compose se inyecta desde el `.env` raíz (`${MAX_FILE_SIZE_MB:-20}`).
+6. **Transporte estricto** — `POST /convert` exige `Content-Type: application/json` (415 si no, vía `mime.ParseMediaType`); `chi` ya cubre 405.
+7. **Logging con `slog` (ADR-0007)** — JSON una línea a stdout; `LOG_LEVEL` → `slog.Level` vía `config.ParseLogLevel`. Middleware de request logging (`"http request completed"`) con method/path/status/bytes/duration/request_id, sin contenido del body.
+8. **Tests de integración en `/test`** — validan Typst sobre tablas/headers y la ausencia de archivos temporales **durante** la conversión (watcher de `TMPDIR`/CWD + `strace` si está disponible); se omiten con `t.Skip` si `pandoc`/`typst` no están en PATH. El resto de tests son unit (no requieren Pandoc).
+9. **Deploy como servicio interno** — `networks: [fast_pdf_network]`, **sin** `ports` al host, imagen multi-stage con `pandoc` + `typst` + `ca-certificates`, usuario non-root.
 
 ## Task List
 
@@ -36,7 +38,7 @@ Construir `pdf-converter`, el wrapper de Pandoc que convierte Markdown a PDF al 
 - [ ] Task 4: Router chi + handler `POST /convert` + `/health`
 
 ### Checkpoint: Transporte
-- [ ] `POST /convert` end-to-end: 200 / 400 / 413 / 422 / 500
+- [ ] `POST /convert` end-to-end: 200 / 400 / 413 / 415 / 422 / 500
 
 ### Milestone 4 — Integración + wiring + deploy
 - [ ] Task 5: Tests de integración en `/test`
