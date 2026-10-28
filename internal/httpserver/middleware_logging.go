@@ -23,14 +23,27 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(ww, r)
 
-			logger.Info("http request completed",
-				"method", r.Method,
-				"path", r.URL.Path,
-				"status", ww.Status(),
+			logger.Log(r.Context(), levelForStatus(ww.Status()), "http request completed",
+				"http_method", r.Method,
+				"http_path", r.URL.Path,
+				"http_status", ww.Status(),
 				"bytes", ww.BytesWritten(),
-				"duration", time.Since(start),
+				"duration_ms", time.Since(start).Milliseconds(),
 				"request_id", middleware.GetReqID(r.Context()),
 			)
 		})
+	}
+}
+
+// levelForStatus maps an HTTP status code to the slog level prescribed by
+// ADR-0007: INFO for 2xx/3xx, WARN for 4xx and ERROR for 5xx.
+func levelForStatus(status int) slog.Level {
+	switch {
+	case status >= 500:
+		return slog.LevelError
+	case status >= 400:
+		return slog.LevelWarn
+	default:
+		return slog.LevelInfo
 	}
 }

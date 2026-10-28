@@ -74,6 +74,11 @@ interpolación del compose:
   `MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-20}`. El valor del default en código
   también es 20, para que un servicio levantado aislado se comporte igual.
 
+- Nota DoS: el `MaxBytesReader` del handler usa un envelope de peor caso de
+  escape JSON (`MaxFileSizeBytes*6 + overhead`), por lo que una petición puede
+  llegar a ~120 MB en memoria antes del chequeo estricto de `content` (20 MB).
+  Aceptable en servicio interno; superficie DoS a considerar.
+
 ## Code Style
 
 Go idiomático, `gofmt`, doc comments en inglés (convención de los repos
@@ -83,7 +88,10 @@ es pura y testeable; el handler es una capa delgada.
 ```go
 // Convert ejecuta Pandoc leyendo de stdin y escribiendo a stdout (RAM-only).
 // No crea archivos temporales.
-func Convert(ctx context.Context, cfg Config, markdown string) ([]byte, error) {
+func Convert(ctx context.Context, timeout time.Duration, markdown string) ([]byte, error) {
+    ctx, cancel := context.WithTimeout(ctx, timeout)
+    defer cancel()
+
     cmd := exec.CommandContext(ctx, "pandoc",
         "-f", "markdown",
         "-t", "pdf",
@@ -94,7 +102,12 @@ func Convert(ctx context.Context, cfg Config, markdown string) ([]byte, error) {
     cmd.Stdout = &out
     cmd.Stderr = &stderr
     if err := cmd.Run(); err != nil {
-        return nil, fmt.Errorf("pandoc: %w: %s", err, stderr.String())
+        // exit code 64 = parse error de Pandoc → 422; el resto → 500.
+        var exitErr *exec.ExitError
+        if errors.As(err, &exitErr) && exitErr.ExitCode() == 64 {
+            return nil, fmt.Errorf("%w: %s", converter.ErrInvalidMarkdown, stderr.String())
+        }
+        return nil, fmt.Errorf("%w: %s", converter.ErrConversion, stderr.String())
     }
     return out.Bytes(), nil
 }
@@ -130,8 +143,9 @@ a un pipeline de dos etapas en memoria: `pandoc -t typst -o -` → `typst compil
 - **Config (unit):** `Load()` con env y defaults; `ParseLogLevel` para
   `LOG_LEVEL` → `slog.Level`.
 - **Logging (unit):** el middleware de request logging emite
-  `"http request completed"` (método, path, status, bytes, duración, request_id)
-  y nunca loguea el contenido del body.
+  `"http request completed"` (`http_method`, `http_path`, `http_status`,
+  `bytes`, `duration_ms`, `request_id`) con nivel `INFO` (2xx/3xx), `WARN`
+  (4xx) o `ERROR` (5xx), y nunca loguea el contenido del body.
 - **Integración (`/test`, requiere `pandoc`+`typst`):** conversión end-to-end de
   un Markdown con tablas/headers y verificación de que el output es un PDF válido
   (magic `%PDF`). Incluye la verificación RAM-only (vigilar `TMPDIR`/CWD durante

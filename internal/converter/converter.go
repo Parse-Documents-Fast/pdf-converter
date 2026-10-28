@@ -49,11 +49,11 @@ func Convert(ctx context.Context, timeout time.Duration, markdown string) ([]byt
 			return nil, fmt.Errorf("%w: conversion timed out: %s", ErrConversion, errStr)
 		}
 
-		// Classify error: check for parse errors or invalid markdown patterns in stderr
-		lowerErr := strings.ToLower(errStr)
-		if strings.Contains(lowerErr, "could not parse") ||
-			strings.Contains(lowerErr, "parse error") ||
-			strings.Contains(lowerErr, "unexpected") {
+		// Classify a Pandoc parse error (e.g. malformed YAML metadata): Pandoc
+		// reports it with exit code 64 (PandocParseError). Any other non-zero
+		// exit is a generic engine failure.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 64 {
 			return nil, fmt.Errorf("%w: %s", ErrInvalidMarkdown, errStr)
 		}
 
