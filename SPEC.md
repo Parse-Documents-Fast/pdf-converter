@@ -18,8 +18,9 @@ un wrapper de **Pandoc**: recibe Markdown, ejecuta Pandoc, devuelve el PDF.
 - **Lenguaje:** Go `1.26.8` (módulo `github.com/Parse-Documents-Fast/pdf-converter`).
 - **Router HTTP:** `chi/v5`.
 - **Logging:** `log/slog`, JSON una línea a stdout (ADR-0007).
-- **Motor de conversión:** Pandoc (`pandoc >= 3.1.8`) + **Typst**
-  (`--pdf-engine=typst`). Render en memoria, sin archivos temporales.
+- **Motor de conversión:** Pandoc (`pandoc >= 3.1.8`) + **Typst** en pipeline
+  de dos etapas (`pandoc -t typst -o -` → `typst compile --format pdf - /dev/stdout`).
+  Render en memoria, sin archivos temporales.
 - **Docker:** multi-stage (`CGO_ENABLED=0`, binario estático) + imagen final con
   `pandoc` + `typst` + `ca-certificates`, usuario non-root.
 
@@ -86,28 +87,38 @@ hermanos). Núcleo separado del transporte (ADR-0004): la función de conversió
 es pura y testeable; el handler es una capa delgada.
 
 ```go
-// Convert ejecuta Pandoc leyendo de stdin y escribiendo a stdout (RAM-only).
-// No crea archivos temporales.
+// Convert convierte Markdown a PDF por pipes (RAM-only).
+// Etapa 1: Pandoc emite Typst por stdout. Etapa 2: Typst compila desde stdin
+// y escribe el PDF en /dev/stdout. No crea archivos temporales.
 func Convert(ctx context.Context, timeout time.Duration, markdown string) ([]byte, error) {
     ctx, cancel := context.WithTimeout(ctx, timeout)
     defer cancel()
 
-    cmd := exec.CommandContext(ctx, "pandoc",
+    pandoc := exec.CommandContext(ctx, "pandoc",
         "-f", "markdown",
-        "-t", "pdf",
-        "--pdf-engine", "typst",
+        "-t", "typst",
         "-o", "-")
-    cmd.Stdin = strings.NewReader(markdown)
-    var out, stderr bytes.Buffer
-    cmd.Stdout = &out
-    cmd.Stderr = &stderr
-    if err := cmd.Run(); err != nil {
+    pandoc.Stdin = strings.NewReader(markdown)
+    var typstSource, pandocStderr bytes.Buffer
+    pandoc.Stdout = &typstSource
+    pandoc.Stderr = &pandocStderr
+    if err := pandoc.Run(); err != nil {
         // exit code 64 = parse error de Pandoc → 422; el resto → 500.
         var exitErr *exec.ExitError
         if errors.As(err, &exitErr) && exitErr.ExitCode() == 64 {
-            return nil, fmt.Errorf("%w: %s", converter.ErrInvalidMarkdown, stderr.String())
+            return nil, fmt.Errorf("%w: %s", converter.ErrInvalidMarkdown, pandocStderr.String())
         }
-        return nil, fmt.Errorf("%w: %s", converter.ErrConversion, stderr.String())
+        return nil, fmt.Errorf("%w: %s", converter.ErrConversion, pandocStderr.String())
+    }
+
+    typst := exec.CommandContext(ctx, "typst",
+        "compile", "--format", "pdf", "-", "/dev/stdout")
+    typst.Stdin = bytes.NewReader(typstSource.Bytes())
+    var out, typstStderr bytes.Buffer
+    typst.Stdout = &out
+    typst.Stderr = &typstStderr
+    if err := typst.Run(); err != nil {
+        return nil, fmt.Errorf("%w: %s", converter.ErrConversion, typstStderr.String())
     }
     return out.Bytes(), nil
 }
@@ -124,11 +135,13 @@ Convenciones:
   solo internamente para clasificar el error (422 vs 500).
 - Sin comentarios en español en el código; doc comments en inglés.
 
-Nota RAM-only: `pandoc --pdf-engine=typst` puede escribir un fuente intermedio
-`.typ` transitorio en `TMPDIR`. El comportamiento se verifica en integración
-(`/test`, Task 5) vigilando `TMPDIR`/CWD durante la conversión (y con `strace`
-si está disponible). Si se confirma escritura en disco, la contingencia es migrar
-a un pipeline de dos etapas en memoria: `pandoc -t typst -o -` → `typst compile - -`.
+Nota RAM-only: la vía `pandoc --pdf-engine=typst` **escribía**
+`toPdfViaTempFile*.html/.pdf` en el CWD (confirmado en integración), lo que
+rompía la restricción y fallaba con usuario non-root. Por eso la implementación
+usa el pipeline de dos etapas en memoria: `pandoc -t typst -o -` →
+`typst compile --format pdf - /dev/stdout`. El test de `/test` vigila
+`TMPDIR`/CWD durante la conversión y, si `strace` está disponible, verifica que
+no haya `open(..., O_CREAT/O_WRONLY)` fuera de stdout.
 
 ## Testing Strategy
 
