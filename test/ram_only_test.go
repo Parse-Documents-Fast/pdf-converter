@@ -77,7 +77,7 @@ func TestConvert_RAMOnly_NoTransientFiles(t *testing.T) {
 		t.Fatalf("unexpected conversion error: %v", err)
 	}
 	if !bytes.HasPrefix(pdfBytes, []byte("%PDF")) {
-		t.Fatalf("expected valid PDF output, got %q", string(pdfBytes)[:10])
+		t.Fatalf("expected valid PDF output, got %q", pdfPrefix(pdfBytes))
 	}
 
 	mu.Lock()
@@ -110,13 +110,16 @@ func TestConvert_StraceNoDiskWrites(t *testing.T) {
 	cmd := exec.Command(stracePath,
 		"-f", "-e", "trace=%file",
 		"-o", logPath,
-		"pandoc", "-f", "markdown", "-t", "pdf", "--pdf-engine", "typst", "-o", "-")
+		"sh", "-c", "pandoc -f markdown -t typst -o - | typst compile --format pdf - /dev/stdout")
 	cmd.Stdin = strings.NewReader(ramOnlyMarkdown)
 	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("pandoc under strace failed: %v: %s", err, stderr.String())
+		t.Fatalf("two-stage conversion under strace failed: %v: %s", err, stderr.String())
+	}
+	if !bytes.HasPrefix(out.Bytes(), []byte("%PDF")) {
+		t.Fatalf("expected valid PDF output, got %q", pdfPrefix(out.Bytes()))
 	}
 
 	logBytes, err := os.ReadFile(logPath)
@@ -145,8 +148,11 @@ func isDiskWrite(straceLine string) bool {
 		!strings.Contains(straceLine, "O_RDWR") {
 		return false
 	}
-	// Ignore writes to the strace log itself.
-	if strings.Contains(straceLine, "strace") {
+	// Ignore writes to the strace log itself and writes into the process's own
+	// stdout (the PDF is produced there, not on disk).
+	if strings.Contains(straceLine, "strace") ||
+		strings.Contains(straceLine, "/dev/stdout") ||
+		strings.Contains(straceLine, "/proc/self/fd") {
 		return false
 	}
 	return true

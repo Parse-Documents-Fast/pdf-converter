@@ -119,13 +119,13 @@
 **Description:** Pruebas end-to-end en `/test` que ejercitan Pandoc+Typst sobre Markdown con estructuras complejas, para validar que el motor preserva tablas/headers y que el output es un PDF válido.
 
 **Acceptance criteria:**
-- [ ] Markdown con tablas, headers y listas → PDF con magic `%PDF` válido
-- [ ] Verificación de que la estructura se preserva (sin pérdida de formato)
-- [ ] Verificación de que no se crean archivos temporales, vigilando `TMPDIR`/CWD **durante** toda la conversión (archivos transitorios incluidos); con `strace` si está disponible
-- [ ] Los tests se omiten (`t.Skip`) si `pandoc`/`typst` no están en PATH
+- [x] Markdown con tablas, headers y listas → PDF con magic `%PDF` válido
+- [x] Verificación de que la estructura se preserva (sin pérdida de formato)
+- [x] Verificación de que no se crean archivos temporales, vigilando `TMPDIR`/CWD **durante** toda la conversión (archivos transitorios incluidos); con `strace` si está disponible
+- [x] Los tests se omiten (`t.Skip`) si `pandoc`/`typst` no están en PATH
 
 **Verification:**
-- [ ] `go test ./test/...` con `pandoc`+`typst` instalados
+- [x] `go test ./test/...` con `pandoc`+`typst` instalados
 
 **Dependencies:** Task 3
 
@@ -142,13 +142,13 @@
 **Description:** Ensamblar config, núcleo y server HTTP; graceful shutdown por señales; configurar `slog` (JSON una línea a stdout, nivel desde `LOG_LEVEL`) y montar el middleware de request logging (ADR-0007).
 
 **Acceptance criteria:**
-- [ ] `cmd/pdf-converter/main.go` arma el grafo (config → converter → server) y arranca
-- [ ] `slog.SetDefault` con handler JSON a stdout y nivel `config.ParseLogLevel(cfg.LogLevel)`
-- [ ] Middleware de request logging emite `"http request completed"` sin contenido del body
-- [ ] Señales (SIGINT/SIGTERM) → shutdown limpio (context cancel + `srv.Shutdown`)
+- [x] `cmd/pdf-converter/main.go` arma el grafo (config → converter → server) y arranca
+- [x] `slog.SetDefault` con handler JSON a stdout y nivel `config.ParseLogLevel(cfg.LogLevel)`
+- [x] Middleware de request logging emite `"http request completed"` sin contenido del body
+- [x] Señales (SIGINT/SIGTERM) → shutdown limpio (context cancel + `srv.Shutdown`)
 
 **Verification:**
-- [ ] `go build ./cmd/pdf-converter` y `go run` arranca sin panics
+- [x] `go build ./cmd/pdf-converter` y `go run` arranca sin panics
 
 **Dependencies:** Task 4
 
@@ -164,13 +164,13 @@
 **Description:** Imagen multi-stage (Go estático + `pandoc` + `typst`) y el compose de servicio interno sin puertos expuestos.
 
 **Acceptance criteria:**
-- [ ] `Dockerfile` multi-stage: build Go (`CGO_ENABLED=0`) → imagen final con `pandoc` + `typst` + `ca-certificates`, usuario non-root, `EXPOSE 8000`, healthcheck
-- [ ] `docker-compose.yml` con `MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-20}`, `networks: [fast_pdf_network]`, **sin** `ports` al host
-- [ ] El servicio arranca aislado (sin el `.env` raíz) con el default 20
+- [x] `Dockerfile` multi-stage: build Go (`CGO_ENABLED=0`) → imagen final con `pandoc` + `typst` + `ca-certificates`, usuario non-root, `EXPOSE 8000`, healthcheck
+- [x] `docker-compose.yml` con `MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-20}`, `networks: [fast_pdf_network]`, **sin** `ports` al host
+- [x] El servicio arranca aislado (sin el `.env` raíz) con el default 20
 
 **Verification:**
-- [ ] `docker build .` compila la imagen
-- [ ] `docker compose config` valida el compose
+- [x] `docker build .` compila la imagen
+- [x] `docker compose config` valida el compose
 
 **Dependencies:** Task 6
 
@@ -195,6 +195,6 @@
 - [ ] `POST /convert` end-to-end: 200 / 400 / 413 / 422 / 500 verificados con `httptest`
 
 ### Checkpoint: Milestone 4 — Complete (tras Tasks 5-7)
-- [ ] `gofmt -l .` vacío; `go test ./...` y `go vet ./...` pasan
-- [ ] Todos los success criteria del spec cubiertos
-- [ ] Listo para REVIEW
+- [x] `gofmt -l .` vacío; `go test ./...` y `go vet ./...` pasan
+- [x] Todos los success criteria del spec cubiertos
+- [x] Listo para REVIEW
